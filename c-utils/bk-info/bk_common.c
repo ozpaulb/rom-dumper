@@ -131,7 +131,7 @@ load_rom_info_common(MEMF *mf, ROM_info_common *ric)
 		if (ric->ric_p_app_blue_legend[i] && read_string(mf, (loff_t)(ric->ric_p_app_blue_legend[i] & (mf_filesize(mf)-1)), blue_legend_buf, MAX_KEY_LEGEND_COMMON)) goto exit_err;
 
 		if (ric->ric_p_appIcon[i] && read_host_imgImage(mf, (loff_t)(ric->ric_p_appIcon[i] & (mf_filesize(mf)-1)), &app_icon)) {
-			fprintf(stderr, "ERROR: could not read icon[%d]!\n", i);
+			fprintf(stderr, "ERROR: could not read icon[%d] (addr=0x%08x, ofs=0x%08x)!\n", i, ric->ric_p_appIcon[i], (ric->ric_p_appIcon[i] & (mf_filesize(mf)-1)));
 			goto exit_err;
 		}
 

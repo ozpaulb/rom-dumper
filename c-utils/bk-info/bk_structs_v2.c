@@ -11,13 +11,13 @@
 static uint32_t	_read24(uint24_t *p_val_in);
 
 int
-is_bookman_image_v2(MEMF *mf)
+is_bookman_image_v2(MEMF *mf, int *p_need_a20_flip)
 {
 	HostCardInfo_v2	hci;
 
 	if (!mf) return 1;
 
-	if (read_HostCardInfo_v2(mf, 1, &hci)) return 0;
+	if (read_HostCardInfo_v2(mf, 1, &hci, p_need_a20_flip)) return 0;
 
 	return 1;
 }
@@ -43,7 +43,7 @@ load_rom_info_v2(MEMF *mf, ROM_info_common *ric, ROM_layout_info_common *rli, in
 
 	ric->ric_rom_version = 2;
 
-	if (read_HostCardInfo_v2(mf, 0, &hci)) goto exit_err;
+	if (read_HostCardInfo_v2(mf, 0, &hci, NULL)) goto exit_err;
 
 	if (rli) {
 		rli->rli_max_chipsels = ((CCI_MAX_CHIPS_V2 < RIC_MAX_CHIPSELS) ? CCI_MAX_CHIPS_V2 : RIC_MAX_CHIPSELS);
@@ -118,26 +118,46 @@ _read24(uint24_t *p_val_in)
 }
 
 int
-read_HostCardInfo_v2(MEMF *mf, int quiet, HostCardInfo_v2 *p_out)
+read_HostCardInfo_v2(MEMF *mf, int quiet, HostCardInfo_v2 *p_out, int *p_need_a20_flip)
 {
 	long	filesize;
 	long	hdrpos;
 	int	i;
+	int	need_a20_flip = 0;
+	int	try;
+	int	found = 0;
 
 	if (!p_out) return 1;
 
+	if (p_need_a20_flip) *p_need_a20_flip = 0;
+
 	filesize = mf_filesize(mf);
 
-	hdrpos = (filesize - 128);
+	for (try = 0; try < 2; try++) {
+		if (!try) {
+			hdrpos = (filesize - 128);
+		} else {
+			if (filesize == (2*1048576)) {
+				hdrpos = (1048576 - 128);
+				need_a20_flip = 1;
+			} else {
+				return 1;
+			}
+		}
 
-	if (mf_seek(mf, hdrpos) != 0) return 1;
+		if (mf_seek(mf, hdrpos) != 0) continue;
 
-	if (mf_read(mf, (void *)p_out, sizeof(*p_out)) != sizeof(*p_out)) return 1;
+		if (mf_read(mf, (void *)p_out, sizeof(*p_out)) != sizeof(*p_out)) continue;
 
-	if (memcmp(p_out->ci_cardMagic, CARDINFO_MAGIC_ID_V2, CARDINFO_MAGIC_ID_LEN_V2)) {
-		if (!quiet) fprintf(stderr, "hci: bad magic!\n");
-		return 1;
+		if (memcmp(p_out->ci_cardMagic, CARDINFO_MAGIC_ID_V2, CARDINFO_MAGIC_ID_LEN_V2)) continue;
+
+		found = 1;
+		break;
 	}
+
+	if (!found) return 1;
+
+	if (p_need_a20_flip) *p_need_a20_flip = need_a20_flip;
 
 	endian_fix_LE_val_to_host(&p_out->p_appInfo);
 	endian_fix_LE_val_to_host(&p_out->v_150);

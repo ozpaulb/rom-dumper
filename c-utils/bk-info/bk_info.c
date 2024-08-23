@@ -10,6 +10,9 @@
 #include "mem_file.h"
 
 static void	_show_appHdr_ptr(const char *p_id, uint32_t addr, uint32_t offs);
+static size_t	_round_up_to_power_of_2(size_t inval);
+static int	_handle_a20_invert_chip(MEMF *mf);
+static int	_handle_a20_invert_chip_allchips(int num_chips, MEMF **pp_chips);
 
 int
 main(int argc, char *argv[])
@@ -21,12 +24,13 @@ main(int argc, char *argv[])
 	int	i, j;
 	ROM_info_common	ric;
 	ROM_layout_info_common	rli;
-	size_t	sz_allrom = 0;
+	size_t	sz_allrom_orig = 0, sz_allrom = 0;
 	MEMF	*mf_allrom = (MEMF *)0;
 	loff_t	offset, top_offset;
 	uint16_t	csum;
 	uint8_t	*p8;
 	int	any_csum_bad = 0;
+	int	need_a20_flip = 0;
 
 	if (argc < 2) {
 		fprintf(stderr, "Usage: %s filename.bin\n", argv[0]);
@@ -49,12 +53,15 @@ main(int argc, char *argv[])
 		goto exit_err;
 	}
 
-	if (is_bookman_image_v1(mf_chips[0])) {
+	if (is_bookman_image_v1(mf_chips[0], &need_a20_flip)) {
+		if (need_a20_flip) _handle_a20_invert_chip_allchips(mf_num_chips, mf_chips);
 		if (load_rom_info_v1(mf_chips[0], &ric, &rli, 1)) goto exit_err;
-	} else if (is_bookman_image_v2(mf_chips[0])) {
+	} else if (is_bookman_image_v2(mf_chips[0], &need_a20_flip)) {
+		if (need_a20_flip) _handle_a20_invert_chip_allchips(mf_num_chips, mf_chips);
 		if (load_rom_info_v2(mf_chips[0], &ric, &rli, 1)) goto exit_err;
 	} else {
-		fprintf(stderr, "ERROR: unknown ROM file format!\n");
+		fprintf(stderr, "ERROR: unknown ROM file format (%s%s%s)!\n",
+			fname_chips[0], ((mf_num_chips > 1) ? "/" : ""), ((mf_num_chips > 1) ? fname_chips[1] : ""));
 		goto exit_err;
 	}
 
@@ -73,7 +80,9 @@ main(int argc, char *argv[])
 		fprintf(stderr, "ERROR: could not determine total ROM memory region size!\n");
 		goto exit_err;
 	}
-sz_allrom = (16*1048576);
+
+	sz_allrom_orig = sz_allrom;
+	sz_allrom = _round_up_to_power_of_2(sz_allrom);
 
 	if (!(mf_allrom = mf_new(sz_allrom, 0xff))) {
 		fprintf(stderr, "ERROR: could not allocate 0x%08lx bytes for ROM memory region!\n", sz_allrom);
@@ -135,7 +144,7 @@ sz_allrom = (16*1048576);
 		offset += rli.rli_chipsel_byteCounts[i];
 	}
 	if (!any_csum_bad) rli.rli_chipsel_all_checksums_good = 1;
-mf_save(mf_allrom, "out_allrom.bin");
+//mf_save(mf_allrom, "out_allrom.bin");
 	switch(ric.ric_rom_version) {
 	case 1:
 		if (load_rom_info_v1(mf_allrom, &ric, NULL, 0)) goto exit_err;
@@ -151,7 +160,10 @@ mf_save(mf_allrom, "out_allrom.bin");
 
 	if (load_rom_info_common(mf_allrom, &ric)) goto exit_err;
 
-	printf("File: '%s' (BOOKMAN image version %d, csum(s) %s)\n", fname_chips[0], ric.ric_rom_version, (rli.rli_chipsel_all_checksums_good ? "good" : "bad"));
+	printf("File: '%s%s%s' (BOOKMAN image version %d, csum(s) %s%s)\n",
+		fname_chips[0], ((mf_num_chips > 1) ? "/" : ""), ((mf_num_chips > 1) ? fname_chips[1] : ""),
+		ric.ric_rom_version, (rli.rli_chipsel_all_checksums_good ? "good" : "bad"),
+		(need_a20_flip ? ", needs A20 invert" : ""));
 	for (i = 0; i < ric.ric_num_apps; i++) {
 		printf("App #%d\n", i);
 		printf("\tName: '%s'\n", ric.ric_app_names[i]);
@@ -212,4 +224,49 @@ _show_appHdr_ptr(const char *p_id, uint32_t addr, uint32_t offs)
 	}
 	printf("\n");
 
+}
+
+static size_t
+_round_up_to_power_of_2(size_t inval)
+{
+	size_t	curval = 1;
+
+	while(curval < inval) {
+		curval <<= 1;
+	}
+
+	return curval;
+}
+
+#define	A20_REGION_SIZE			(1L << 20)
+
+static int
+_handle_a20_invert_chip(MEMF *mf)
+{
+	MEMF	*mf_tmp = (MEMF *)0;
+
+	if (!mf || !mf->p_data || !mf->sz_data) return 1;
+
+	if (mf->sz_data != (2*A20_REGION_SIZE)) return 0;	// FIXME! handle more than just one A20 swap (4M should swap twice, 1.5M should be handled)
+
+	if (!(mf_tmp = mf_new(A20_REGION_SIZE, -1))) return 1;
+
+	memcpy((void *)&mf_tmp->p_data[0], (void *)&mf->p_data[0], A20_REGION_SIZE);
+	memcpy((void *)&mf->p_data[0], (void *)&mf->p_data[A20_REGION_SIZE], A20_REGION_SIZE);
+	memcpy((void *)&mf->p_data[A20_REGION_SIZE], (void *)&mf_tmp->p_data[0], A20_REGION_SIZE);
+
+	mf_free(mf_tmp);
+
+	return 0;
+}
+
+static int
+_handle_a20_invert_chip_allchips(int num_chips, MEMF **pp_chips)
+{
+	int	i;
+
+	for (i = 0; i < num_chips; i++) {
+		_handle_a20_invert_chip(pp_chips[i]);
+	}
+	return 0;
 }

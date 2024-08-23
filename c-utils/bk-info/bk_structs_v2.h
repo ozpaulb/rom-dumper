@@ -64,9 +64,9 @@ typedef struct  __attribute__((packed)) tagappInfo_v2 {
 	uint8_t	ai_reserved[AI_RESERVED_BYTES_V2];
 } appInfo_v2;
 
-extern int	is_bookman_image_v2(MEMF *mf);
+extern int	is_bookman_image_v2(MEMF *mf, int *p_need_a20_flip);
 extern int	load_rom_info_v2(MEMF *mf, ROM_info_common *rci, ROM_layout_info_common *rli, int only_chip_layout);
-extern int	read_HostCardInfo_v2(MEMF *mf, int quiet, HostCardInfo_v2 *p_out);
+extern int	read_HostCardInfo_v2(MEMF *mf, int quiet, HostCardInfo_v2 *p_out, int *p_need_a20_flip);
 extern int	read_appInfo_v2(MEMF *mf, loff_t offset, appInfo_v2 *p_out);
 
 

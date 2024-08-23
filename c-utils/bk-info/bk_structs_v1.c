@@ -11,13 +11,13 @@
 static int	is_known_bad_key_legends_V1(appInfo_v1 *ai);
 
 int
-is_bookman_image_v1(MEMF *mf)
+is_bookman_image_v1(MEMF *mf, int *p_need_a20_flip)
 {
 	HostCardInfo_v1	hci;
 
 	if (!mf) return 0;
 
-	if (read_HostCardInfo_v1(mf, 1, &hci)) return 0;
+	if (read_HostCardInfo_v1(mf, 1, &hci, p_need_a20_flip)) return 0;
 
 	return 1;
 }
@@ -39,7 +39,7 @@ load_rom_info_v1(MEMF *mf, ROM_info_common *ric, ROM_layout_info_common *rli, in
 
 	ric->ric_rom_version = 1;
 
-	if (read_HostCardInfo_v1(mf, 0, &hci) || read_cardChecksumInfo_v1(mf, &cci)) {
+	if (read_HostCardInfo_v1(mf, 0, &hci, NULL) || read_cardChecksumInfo_v1(mf, &cci)) {
 		fprintf(stderr, "ERROR: could not read hci and/or cci!\n");
 		goto exit_err;
 	}
@@ -113,18 +113,38 @@ exit_common:
 
 
 int
-read_HostCardInfo_v1(MEMF *mf, int quiet, HostCardInfo_v1 *p_out)
+read_HostCardInfo_v1(MEMF *mf, int quiet, HostCardInfo_v1 *p_out, int *p_need_a20_flip)
 {
+	int	try;
+	loff_t	seek_offset;
+	int	found = 0;
+	int	need_a20_flip = 0;
+
 	if (!p_out) return 1;
 
-	if (mf_seek(mf, 0) != 0) return 1;
+	if (p_need_a20_flip) *p_need_a20_flip = 0;
 
-	if (mf_read(mf, (void *)p_out, sizeof(*p_out)) != sizeof(*p_out)) return 1;
+	for (try = 0; try < 2; try++) {
+		if (!try) {
+			seek_offset = 0;
+		} else {
+			seek_offset = 1048576;
+			need_a20_flip = 1;
+		}
 
-	if (memcmp(p_out->ci_cardMagic, CARDINFO_MAGIC_ID_V1, CARDINFO_MAGIC_ID_LEN_V1)) {
-		if (!quiet) fprintf(stderr, "hci: bad magic!\n");
-		return 1;
+		if (mf_seek(mf, seek_offset) != 0) continue;
+
+		if (mf_read(mf, (void *)p_out, sizeof(*p_out)) != sizeof(*p_out)) continue;
+
+		if (memcmp(p_out->ci_cardMagic, CARDINFO_MAGIC_ID_V1, CARDINFO_MAGIC_ID_LEN_V1)) continue;
+
+		found = 1;
+		break;
 	}
+
+	if (!found) return 1;
+
+	if (p_need_a20_flip) *p_need_a20_flip = need_a20_flip;
 
 	endian_fix_LE_val_to_host(&p_out->ci_cardID);
 	endian_fix_LE_val_to_host(&p_out->ci_cardRamSize);
